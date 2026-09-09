@@ -40,10 +40,10 @@ Upload `dist/playkit-document-pip.js` to any HTTPS location the player pages can
 (your CDN, the customer's static host, etc.). Note the full URL, e.g.
 `https://your-cdn.example.com/playkit/playkit-document-pip.js`.
 
-## 3. Register it on player `51878742` (uiConf-level, applies to all embeds)
+## 3. Register it on player (uiConf-level, applies to all embeds)
 
 There are two ways to make the plugin globally active on the player. Both live in the player
-studio (Rich Media CMS / KMC → Studio → your player `51878742`).
+studio (Rich Media CMS / KMC → Studio → your player).
 
 ### Option A — Studio UI (if your studio build exposes a custom-plugin field)
 
