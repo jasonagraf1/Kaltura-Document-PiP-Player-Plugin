@@ -1,5 +1,5 @@
 /*!
- * playkit-document-pip v1.1.0
+ * playkit-document-pip v1.2.0
  * Kaltura Player V7 (Playkit) plugin: routes the player's Picture-in-Picture action to
  * Document Picture-in-Picture so overlay plugins (e.g. a dynamic watermark) are preserved
  * in the floating window.
@@ -136,31 +136,26 @@
           self._pipWindow = pipWindow;
           self._copyStyles(pipWindow.document);
 
+          // Neutral layout reset only — NO player-specific class names. Mirrors the
+          // validated test page: the PiP body fills the window, and the moved element is
+          // sized to fill the body so the player lays itself out for that size.
           var reset = pipWindow.document.createElement('style');
-          reset.textContent =
-            'html,body{margin:0;padding:0;height:100%;background:#000;overflow:hidden;}' +
-            '.playkit-player{width:100%!important;height:100%!important;}' +
-            // Force the Playkit control bar / top bar to stay visible in the PiP window.
-            // The player's auto-hide relies on mouse activity in the original document,
-            // which no longer reaches it after reparenting.
-            '.playkit-player .playkit-bottom-bar,' +
-            '.playkit-player .playkit-top-bar,' +
-            '.playkit-player .playkit-control-bar,' +
-            '.playkit-player .playkit-player-gui{opacity:1!important;visibility:visible!important;transform:none!important;pointer-events:auto!important;}' +
-            // Neutralise the "controls hidden / too small" state classes.
-            '.playkit-player.playkit-hide-controls .playkit-player-gui,' +
-            '.playkit-player.playkit-size-xsmall .playkit-bottom-bar,' +
-            '.playkit-player.playkit-size-small .playkit-bottom-bar{opacity:1!important;visibility:visible!important;}';
+          reset.textContent = 'html,body{margin:0;padding:0;height:100%;background:#000;overflow:hidden;}';
           pipWindow.document.head.appendChild(reset);
 
           self._placeholder = document.createElement('div');
           self._placeholder.style.display = 'none';
           root.parentNode.insertBefore(self._placeholder, root);
-          pipWindow.document.body.appendChild(root);
-          clog('moved player root into PiP window — watermark should ride along');
 
-          if (!self.config.disableResizeInPip) self._safeResize();
-          self._startControlKeepAlive(pipWindow, root);
+          // Preserve the element's own inline size, then make it fill the PiP window.
+          // This is the key step the working test page did (#player-shell{height:100%}).
+          self._savedInlineCssText = root.style.cssText;
+          root.style.width = '100%';
+          root.style.height = '100%';
+
+          pipWindow.document.body.appendChild(root);
+          clog('moved player root into PiP window (100% x 100%) — watermark rides along');
+
           pipWindow.addEventListener('pagehide', self._onWindowUnload);
         })
         .catch(function (e) {
@@ -168,45 +163,20 @@
         });
     };
 
-    // Keep the player's activity timer alive by feeding it synthetic mouse activity from
-    // inside the PiP window, so the control bar does not auto-hide.
-    DocumentPip.prototype._startControlKeepAlive = function (pipWindow, root) {
-      var self = this;
-      this._stopControlKeepAlive();
-      var target = root.querySelector('.playkit-player-gui') || root;
-      function poke() {
-        try {
-          var evt = new pipWindow.MouseEvent('mousemove', { bubbles: true, cancelable: true, view: pipWindow });
-          target.dispatchEvent(evt);
-        } catch (e) { /* no-op */ }
-      }
-      poke();
-      this._keepAlive = pipWindow.setInterval(poke, 1500);
-    };
-
-    DocumentPip.prototype._stopControlKeepAlive = function () {
-      if (this._keepAlive && this._pipWindow) {
-        try { this._pipWindow.clearInterval(this._keepAlive); } catch (e) {}
-      }
-      this._keepAlive = null;
-    };
-
     DocumentPip.prototype._onWindowUnload = function () {
-      this._stopControlKeepAlive();
       var root = this._playerRoot;
       if (this._placeholder && this._placeholder.parentNode && root) {
         this._placeholder.parentNode.insertBefore(root, this._placeholder);
         this._placeholder.remove();
+        // Restore the element's original inline styles.
+        if (typeof this._savedInlineCssText === 'string') {
+          root.style.cssText = this._savedInlineCssText;
+          this._savedInlineCssText = null;
+        }
         clog('PiP closed — player restored to page');
       }
       this._placeholder = null;
       this._pipWindow = null;
-      if (!this.config.disableResizeInPip) this._safeResize();
-    };
-
-    DocumentPip.prototype._safeResize = function () {
-      try { if (typeof this.player.updateStyles === 'function') this.player.updateStyles(); } catch (e) {}
-      try { (this._pipWindow || window).dispatchEvent(new Event('resize')); } catch (e) {}
     };
 
     DocumentPip.prototype._copyStyles = function (targetDoc) {
@@ -225,7 +195,6 @@
     };
 
     DocumentPip.prototype.reset = function () {
-      this._stopControlKeepAlive();
       if (this._pipWindow) { try { this._pipWindow.close(); } catch (e) {} }
       this._pipWindow = null;
       this._placeholder = null;
@@ -234,7 +203,7 @@
     DocumentPip.prototype.destroy = function () { this.reset(); };
 
     KalturaPlayer.core.registerPlugin('documentPip', DocumentPip);
-    clog('registered plugin "documentPip" (v1.1.0)');
+    clog('registered plugin "documentPip" (v1.2.0)');
     return true;
   }
 
