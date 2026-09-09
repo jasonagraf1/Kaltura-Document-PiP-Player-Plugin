@@ -1,17 +1,28 @@
 /*!
- * playkit-document-pip v1.0.0
- * Kaltura Player V7 (Playkit) plugin: replaces native Picture-in-Picture with
- * Document Picture-in-Picture so overlay plugins (e.g. a dynamic watermark) are
- * preserved in the floating window.
+ * playkit-document-pip v1.1.0
+ * Kaltura Player V7 (Playkit) plugin: routes the player's Picture-in-Picture action to
+ * Document Picture-in-Picture so overlay plugins (e.g. a dynamic watermark) are preserved
+ * in the floating window.
  *
- * PREBUILT — no build step required. Host this file over HTTPS with permissive CORS
- * and register it on your player (uiConf). It references the global `KalturaPlayer`
- * that the player provides at runtime.
+ * v1.1 change: instead of adding/removing control-bar buttons (brittle across player builds),
+ * this version intercepts requestPictureInPicture() on the video element. The player's
+ * existing PiP button then opens a Document PiP window automatically. Verbose console logging
+ * under the "[documentPip]" prefix lets you confirm each step.
+ *
+ * PREBUILT — no build step. Host over HTTPS with permissive CORS; references global KalturaPlayer.
  */
 (function () {
   'use strict';
-
   if (typeof window === 'undefined') return;
+
+  var LOG = '[documentPip]';
+  function clog() {
+    try {
+      var args = Array.prototype.slice.call(arguments);
+      args.unshift(LOG);
+      console.log.apply(console, args);
+    } catch (e) { /* no-op */ }
+  }
 
   function register() {
     if (!window.KalturaPlayer || !KalturaPlayer.core || !KalturaPlayer.core.BasePlugin) {
@@ -20,7 +31,6 @@
     var BasePlugin = KalturaPlayer.core.BasePlugin;
 
     var DEFAULT_CONFIG = {
-      replaceNativePipButton: true,
       width: 400,
       height: 0,
       disableResizeInPip: false
@@ -31,29 +41,39 @@
       this._pipWindow = null;
       this._placeholder = null;
       this._playerRoot = null;
+      this._hijacked = false;
       this._onWindowUnload = this._onWindowUnload.bind(this);
-      this._toggle = this._toggle.bind(this);
+      clog('plugin instance created');
     }
 
-    // Extend BasePlugin.
     DocumentPip.prototype = Object.create(BasePlugin.prototype);
     DocumentPip.prototype.constructor = DocumentPip;
 
-    DocumentPip.defaultConfig = DEFAULT_CONFIG;
     Object.defineProperty(DocumentPip, 'defaultConfig', {
       get: function () { return DEFAULT_CONFIG; }
     });
 
     DocumentPip.isValid = function () {
-      return typeof window !== 'undefined' && 'documentPictureInPicture' in window;
+      var ok = typeof window !== 'undefined' && 'documentPictureInPicture' in window;
+      if (!ok) clog('Document PiP NOT supported in this browser — plugin inert.');
+      return ok;
     };
 
+    // loadMedia is a Playkit plugin lifecycle hook, called when media is loaded.
     DocumentPip.prototype.loadMedia = function () {
+      clog('loadMedia fired');
       this._playerRoot = this._resolvePlayerRoot();
-      if (this.config.replaceNativePipButton) {
-        this._suppressNativePip();
-      }
-      this._installControl();
+      clog('resolved player root:', this._playerRoot);
+      this._hijackNativePip();
+      // Video element can be (re)created; re-hijack on first play as a safety net.
+      var self = this;
+      try {
+        this.player.addEventListener(this.player.Event.FIRST_PLAY, function () {
+          clog('first play — re-checking hijack');
+          self._playerRoot = self._resolvePlayerRoot();
+          self._hijackNativePip();
+        });
+      } catch (e) { /* Event name may differ; ignore */ }
     };
 
     DocumentPip.prototype._resolvePlayerRoot = function () {
@@ -61,114 +81,59 @@
         var view = this.player.getView();
         if (view) return view;
       }
-      var video = this.player.getVideoElement && this.player.getVideoElement();
+      var video = this._getVideo();
       if (video) {
         return video.closest('[id^="player-"], .playkit-player') || video.parentElement;
       }
       return null;
     };
 
-    DocumentPip.prototype._suppressNativePip = function () {
-      try {
-        if (this.player.ui && typeof this.player.ui.setConfig === 'function') {
-          this.player.ui.setConfig({ pictureInPicture: false }, 'pictureInPicture');
-        }
-      } catch (e) {
-        this.logger.warn('Could not disable native PiP via ui config; hiding button via CSS.', e);
-      }
-      var view = this._playerRoot;
-      if (view) {
-        var btn = view.querySelector('.playkit-pip, [aria-label="Picture in picture"], .playkit-picture-in-picture');
-        if (btn) btn.style.display = 'none';
-      }
+    DocumentPip.prototype._getVideo = function () {
+      // Try the documented accessor first, then fall back to DOM.
+      var v = null;
+      try { v = this.player.getVideoElement && this.player.getVideoElement(); } catch (e) {}
+      if (v) return v;
+      var root = this._playerRoot || document;
+      return root.querySelector ? root.querySelector('video') : null;
     };
 
-    DocumentPip.prototype._installControl = function () {
-      var uiManager = this.player.ui;
-      if (uiManager && typeof uiManager.addComponent === 'function') {
-        try {
-          var comp = this._buildButtonComponent();
-          if (comp) {
-            uiManager.addComponent({
-              label: 'documentPip',
-              area: 'BottomBarRightControls',
-              get: comp
-            });
-            return;
-          }
-        } catch (e) {
-          this.logger.warn('UI addComponent failed; falling back to manual button injection.', e);
-        }
-      }
-      this._injectManualButton();
-    };
-
-    DocumentPip.prototype._buildButtonComponent = function () {
-      var ui = KalturaPlayer.ui;
-      var h = ui && ui.preact && ui.preact.h;
-      var toggle = this._toggle;
-      if (!h) return null;
-      return function DocumentPipButton() {
-        return h(
-          'button',
-          {
-            className: 'playkit-control-button playkit-document-pip',
-            'aria-label': 'Picture in picture',
-            tabIndex: 0,
-            onClick: toggle
-          },
-          h(
-            'svg',
-            { viewBox: '0 0 24 24', width: 20, height: 20, fill: 'currentColor', 'aria-hidden': 'true' },
-            h('path', { d: 'M19 7h-8v6h8V7zm2-4H3c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16.01H3V4.98h18v14.03z' })
-          )
-        );
+    // Core of v1.1: replace requestPictureInPicture on the actual video element so the
+    // player's native PiP button opens a Document PiP window instead.
+    DocumentPip.prototype._hijackNativePip = function () {
+      var self = this;
+      var video = this._getVideo();
+      if (!video) { clog('no <video> element found yet to hijack'); return; }
+      if (video.__docPipHijacked) { clog('video already hijacked'); return; }
+      video.__docPipHijacked = true;
+      this._hijacked = true;
+      clog('hijacking video.requestPictureInPicture on', video);
+      video.requestPictureInPicture = function () {
+        clog('intercepted requestPictureInPicture -> Document PiP');
+        self._toggle();
+        // Resolve so the player UI does not log an unhandled rejection.
+        return Promise.resolve();
       };
     };
 
-    DocumentPip.prototype._injectManualButton = function () {
-      var view = this._playerRoot;
-      if (!view) return;
-      var bar = view.querySelector('.playkit-bottom-bar .playkit-right-controls, .playkit-right-controls');
-      if (!bar || bar.querySelector('.playkit-document-pip')) return;
-      var btn = document.createElement('button');
-      btn.className = 'playkit-control-button playkit-document-pip';
-      btn.setAttribute('aria-label', 'Picture in picture');
-      btn.innerHTML =
-        '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true">' +
-        '<path d="M19 7h-8v6h8V7zm2-4H3c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16.01H3V4.98h18v14.03z"/>' +
-        '</svg>';
-      btn.addEventListener('click', this._toggle);
-      bar.appendChild(btn);
-    };
-
     DocumentPip.prototype._toggle = function () {
-      if (this._pipWindow) {
-        this._pipWindow.close();
-        return;
-      }
+      if (this._pipWindow) { clog('toggle: closing existing PiP window'); this._pipWindow.close(); return; }
       this._enterDocumentPip();
     };
 
     DocumentPip.prototype._enterDocumentPip = function () {
       var self = this;
-      if (!DocumentPip.isValid()) {
-        this.logger.warn('Document PiP not supported in this browser.');
-        return;
-      }
+      if (!DocumentPip.isValid()) return;
       var root = this._playerRoot || this._resolvePlayerRoot();
-      if (!root) {
-        this.logger.error('Could not resolve the player root element to move into PiP.');
-        return;
-      }
+      if (!root) { clog('ERROR: could not resolve player root to move into PiP'); return; }
+
       var rect = root.getBoundingClientRect();
       var width = this.config.width || Math.round(rect.width) || 400;
       var height = this.config.height || Math.round(width * 9 / 16);
+      clog('requesting PiP window', width + 'x' + height);
 
       window.documentPictureInPicture.requestWindow({ width: width, height: height })
         .then(function (pipWindow) {
           self._pipWindow = pipWindow;
-
           self._copyStyles(pipWindow.document);
 
           var reset = pipWindow.document.createElement('style');
@@ -181,14 +146,13 @@
           self._placeholder.style.display = 'none';
           root.parentNode.insertBefore(self._placeholder, root);
           pipWindow.document.body.appendChild(root);
+          clog('moved player root into PiP window — watermark should ride along');
 
           if (!self.config.disableResizeInPip) self._safeResize();
-
           pipWindow.addEventListener('pagehide', self._onWindowUnload);
-          self.logger.info('Entered Document PiP; player + overlays moved into floating window.');
         })
         .catch(function (e) {
-          self.logger.error('requestWindow failed (needs a user gesture / one PiP window at a time).', e);
+          clog('requestWindow failed (needs user gesture / one window at a time):', e);
         });
     };
 
@@ -197,26 +161,22 @@
       if (this._placeholder && this._placeholder.parentNode && root) {
         this._placeholder.parentNode.insertBefore(root, this._placeholder);
         this._placeholder.remove();
+        clog('PiP closed — player restored to page');
       }
       this._placeholder = null;
       this._pipWindow = null;
       if (!this.config.disableResizeInPip) this._safeResize();
-      this.logger.info('Document PiP closed; player restored to page.');
     };
 
     DocumentPip.prototype._safeResize = function () {
-      try {
-        if (typeof this.player.updateStyles === 'function') this.player.updateStyles();
-      } catch (e) { /* no-op */ }
-      try {
-        (this._pipWindow || window).dispatchEvent(new Event('resize'));
-      } catch (e) { /* no-op */ }
+      try { if (typeof this.player.updateStyles === 'function') this.player.updateStyles(); } catch (e) {}
+      try { (this._pipWindow || window).dispatchEvent(new Event('resize')); } catch (e) {}
     };
 
     DocumentPip.prototype._copyStyles = function (targetDoc) {
-      document
-        .querySelectorAll('style, link[rel="stylesheet"]')
-        .forEach(function (node) { targetDoc.head.appendChild(node.cloneNode(true)); });
+      document.querySelectorAll('style, link[rel="stylesheet"]').forEach(function (node) {
+        targetDoc.head.appendChild(node.cloneNode(true));
+      });
       for (var i = 0; i < document.styleSheets.length; i++) {
         var sheet = document.styleSheets[i];
         try {
@@ -229,24 +189,20 @@
     };
 
     DocumentPip.prototype.reset = function () {
-      if (this._pipWindow) {
-        try { this._pipWindow.close(); } catch (e) { /* no-op */ }
-      }
+      if (this._pipWindow) { try { this._pipWindow.close(); } catch (e) {} }
       this._pipWindow = null;
       this._placeholder = null;
     };
 
-    DocumentPip.prototype.destroy = function () {
-      this.reset();
-    };
+    DocumentPip.prototype.destroy = function () { this.reset(); };
 
     KalturaPlayer.core.registerPlugin('documentPip', DocumentPip);
+    clog('registered plugin "documentPip" (v1.1.0)');
     return true;
   }
 
-  // The player bundle may load after this file. Retry registration briefly until the
-  // global KalturaPlayer is available.
   if (!register()) {
+    clog('KalturaPlayer not ready yet — will retry registration');
     var attempts = 0;
     var timer = setInterval(function () {
       attempts++;
