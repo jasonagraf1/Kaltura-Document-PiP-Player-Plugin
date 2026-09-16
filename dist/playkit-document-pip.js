@@ -1,4 +1,4 @@
-// playkit-js-document-pip (v1.3.0)
+// playkit-js-document-pip (v1.3.1)
 // Routes the Kaltura Player V7 (Playkit) Picture-in-Picture action to Document PiP so overlay
 // plugins (e.g. the dynamic watermark) are preserved in the floating window.
 //
@@ -40,14 +40,39 @@ class DocumentPip extends BasePlugin {
     clog('loadMedia fired');
     this._playerRoot = this._resolvePlayerRoot();
     clog('resolved player root:', this._playerRoot);
+    // The <video> element is often created AFTER loadMedia and may be swapped out on
+    // source changes. Rather than relying on one lifecycle event, watch for it: try now,
+    // poll briefly, and observe DOM mutations so we always re-hijack the current video.
+    this._ensureHijack();
+  }
+
+  // Robustly keep the current <video> element hijacked. Runs an immediate attempt, a
+  // bounded poll (covers the video being created after loadMedia), and a MutationObserver
+  // (covers the player replacing the video element on source/quality changes).
+  _ensureHijack() {
     this._hijackNativePip();
-    try {
-      this.player.addEventListener(this.player.Event.FIRST_PLAY, () => {
-        clog('first play — re-checking hijack');
-        this._playerRoot = this._resolvePlayerRoot();
+
+    if (!this._pollTimer) {
+      let attempts = 0;
+      this._pollTimer = setInterval(() => {
+        attempts++;
         this._hijackNativePip();
-      });
-    } catch (e) { /* Event name may differ; ignore */ }
+        const v = this._getVideo();
+        if ((v && v.__docPipHijacked) || attempts > 60) {
+          clearInterval(this._pollTimer);
+          this._pollTimer = null;
+        }
+      }, 250);
+    }
+
+    if (!this._observer && typeof MutationObserver !== 'undefined') {
+      const target = this._playerRoot || document.body;
+      if (target) {
+        this._observer = new MutationObserver(() => this._hijackNativePip());
+        this._observer.observe(target, { childList: true, subtree: true });
+        clog('watching DOM for the video element');
+      }
+    }
   }
 
   // Resolve the FULL player wrapper (.playkit-player), not the inner video-only container.
@@ -192,6 +217,8 @@ class DocumentPip extends BasePlugin {
 
   reset() {
     if (this._pipWindow) { try { this._pipWindow.close(); } catch (e) {} }
+    if (this._pollTimer) { clearInterval(this._pollTimer); this._pollTimer = null; }
+    if (this._observer) { try { this._observer.disconnect(); } catch (e) {} this._observer = null; }
     this._pipWindow = null;
     this._placeholder = null;
   }
@@ -200,6 +227,6 @@ class DocumentPip extends BasePlugin {
 }
 
 KalturaPlayer.core.registerPlugin('documentPip', DocumentPip);
-clog('registered plugin "documentPip" (v1.3.0)');
+clog('registered plugin "documentPip" (v1.3.1)');
 
 export default DocumentPip;
