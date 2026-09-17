@@ -1,158 +1,90 @@
 # playkit-js-document-pip
 
-A Kaltura Player **V7 (Playkit)** plugin that replaces the player's native
-Picture-in-Picture action with **Document Picture-in-Picture**. Native PiP hands only the
-video's pixel buffer to the OS mini-player, so HTML overlay plugins — including a **dynamic
-watermark** — are dropped. Document PiP opens a real, always-on-top browser window that
-hosts an HTML document, so this plugin moves the **entire player view** (video + control bar
-+ every overlay plugin) into it. The watermark rides along and keeps updating, and the window
-stays on top when the user switches tabs or apps.
+A self-hosted script that upgrades the Kaltura Player **V7 (Playkit)** Picture-in-Picture
+action to **Document Picture-in-Picture**.
 
-This is written to be enabled at the **uiConf / studio level** so every embed of the player
-gets it automatically, with the native PiP button replaced in place.
+Native PiP hands only the video's pixel buffer to the Chromium mini-player, so all Kaltura
+Player overlays are dropped. This could include Kaltura's AI Genie, summary & chapters, dynamic
+watermarks, and more. Document PiP instead opens a real, always-on-top browser window that hosts
+an HTML document, so this script moves the **entire player view** — video, control bar, and
+every overlay — into it. Everything renders and keeps updating as it does on the page, and the
+window stays on top when the user switches tabs or apps.
+
+It works from a **single self-hosted `<script>` tag with no player config**. A standalone
+watcher finds any Kaltura player video on the page and intercepts `requestPictureInPicture()`,
+so loading the file once — site-wide via MediaSpace — is enough to enable Document PiP on every
+player.
 
 ---
 
 ## What's in here
 
-- `src/document-pip.js` — the plugin source (registers as `documentPip`).
-- `webpack.config.js` — builds a single UMD bundle; `KalturaPlayer` is external.
-- `package.json` — build scripts and dev dependencies.
+- `dist/playkit-document-pip.js` — the **prebuilt IIFE bundle you host** (browser-ready, no
+  build step, references global `KalturaPlayer` only when present).
+- `src/document-pip.js` — ES-module source, kept in sync with the dist bundle.
+- `webpack.config.js` / `package.json` — optional build tooling (not required to use dist).
 
 ---
 
-## 1. Build the bundle
+## 1. Host the bundle
 
-```bash
-cd playkit-js-document-pip
-npm install
-npm run build
-```
-
-Output: `dist/playkit-document-pip.js`. This is the file you host.
-
-> The bundle deliberately does **not** include the player core — it references the global
-> `KalturaPlayer` that the player provides at runtime.
-
-## 2. Host the bundle
-
-Upload `dist/playkit-document-pip.js` to any HTTPS location the player pages can reach
-(your CDN, the customer's static host, etc.). Note the full URL, e.g.
+Upload `dist/playkit-document-pip.js` to any HTTPS location the player pages can reach (a CDN,
+static host, or the existing GitHub Pages URL). Note the full URL, e.g.
 `https://your-cdn.example.com/playkit/playkit-document-pip.js`.
 
-## 3. Register it on player (uiConf-level, applies to all embeds)
+> If you edit the source, rebuild with `npm install && npm run build` (output goes to
+> `dist/playkit-document-pip.js`). The bundle deliberately does **not** include the player
+> core — it references the global `KalturaPlayer` the player provides at runtime.
 
-There are two ways to make the plugin globally active on the player. Both live in the player
-studio (Rich Media CMS / KMC → Studio → your player).
+## 2. Load it site-wide in MediaSpace (KMS)
 
-### Option A — Studio UI (if your studio build exposes a custom-plugin field)
+In the KMS admin (`https://<partner>.mediaspace.kaltura.com/admin`), open the **Application**
+module and find the **`headerJSlinks`** field ("Enter links to JS files to be loaded on all KMS
+headers"). Click **+ Add "headerJSlinks"** and paste the bundle URL:
 
-In the player's advanced/plugin settings, add:
-
-- **Plugin bundle URL:** the hosted `playkit-document-pip.js` from step 2.
-- **Plugin config** (JSON), enabling `documentPip`:
-
-```json
-{
-  "plugins": {
-    "documentPip": {
-      "replaceNativePipButton": true,
-      "width": 400
-    }
-  }
-}
+```
+https://your-cdn.example.com/playkit/playkit-document-pip.js?v=1.4.0
 ```
 
-Save and publish the player. Every embed of `51878742` now loads the plugin.
+Then scroll to the bottom and **Save**. This loads the file in the `<head>` of every KMS page,
+and the watcher self-activates — no per-page edits and no player config required. Every
+MediaSpace player gets Document PiP.
 
-### Option B — uiConf JSON (via the uiConf/admin API)
+> **Which field:** use `headerJSlinks` (loads an external JS file by URL) — **not** `headerJS`
+> (a box for raw inline JavaScript) or `bodyJS` (inline JS at page bottom). Note the field's own
+> warning: these do **not** run on `/admin` pages — that's fine, you only need it on the
+> viewer/player pages, which are covered.
 
-If you edit the player's uiConf config directly, merge the plugin into the player's config
-object. The player loads external plugin bundles listed under `productVersions` /
-`plugins`, then applies the `plugins` config:
+> **Cache note:** since this loads on every page, bump the `?v=` number in the `headerJSlinks`
+> field whenever you deploy a new build, or KMS pages keep serving the cached bundle (GitHub
+> Pages caches ~10 min).
 
-```jsonc
-{
-  // ...existing player config...
-  "plugins": {
-    "documentPip": {
-      "replaceNativePipButton": true,
-      "width": 400
-    }
-  },
-  // Tell the player where to fetch the plugin bundle from:
-  "productVersions": {
-    "documentPip": {
-      "url": "https://your-cdn.example.com/playkit/playkit-document-pip.js"
-    }
-  }
-}
-```
+## 3. Verify
 
-Exact key names for the external-bundle loader can vary by player build. If your build
-loads bundles by script tag on the page instead, use Option C.
-
-### Option C — page-level script tag (fastest to verify on real embeds)
-
-If you can edit the embedding pages, load the bundle right after the player bundle and
-before `KalturaPlayer.setup`, then enable it in setup config:
-
-```html
-<script src="https://cdnapisec.kaltura.com/p/4716502/embedPlaykitJs/uiconf_id/51878742"></script>
-<script src="https://your-cdn.example.com/playkit/playkit-document-pip.js"></script>
-<script>
-  const kp = KalturaPlayer.setup({
-    targetId: 'player-container',
-    provider: { partnerId: 4716502, uiConfId: 51878742, ks: '<YOUR_KS>' },
-    plugins: { documentPip: { replaceNativePipButton: true, width: 400 } }
-  });
-  kp.loadMedia({ entryId: '1_o02vc114' });
-</script>
-```
-
-This isn't "baked into the uiConf," but it proves the exact plugin end-to-end on a real
-embed before you commit it to studio. Recommended as your first test.
-
----
-
-## Configuration options
-
-| Option                  | Default | Meaning                                                                 |
-|-------------------------|---------|-------------------------------------------------------------------------|
-| `replaceNativePipButton`| `true`  | Hide the built-in PiP control and route the PiP intent through Document PiP. |
-| `width`                 | `400`   | Initial PiP window width (px). Height defaults to 16:9 of width.        |
-| `height`                | `0`     | Initial PiP window height (px). `0` = derive from width.                |
-| `disableResizeInPip`    | `false` | Skip the relayout nudge after moving (set true if your layout misbehaves). |
+On a normal MediaSpace video page (not `/admin`), open DevTools and confirm the console prints
+`[documentPip] watching page for Kaltura player videos` on load and, on play,
+`hijacking video.requestPictureInPicture`. Click the PiP button — the player should pop into a
+floating, always-on-top window with all overlays intact.
 
 ---
 
 ## How it works (for review)
 
-1. `isValid()` returns false where `documentPictureInPicture` is absent, so on non-Chromium
-   browsers the plugin stays inert and native PiP is untouched.
-2. On `loadMedia`, it disables the native PiP UI and injects its own control in the
-   bottom-right of the control bar (same spot as the old button).
-3. On click it calls `documentPictureInPicture.requestWindow()`, copies the page's
-   stylesheets into the new document, leaves a placeholder, and `appendChild`s the player's
-   root view (`player.getView()`) into the PiP window.
-4. On the window's `pagehide`, it moves the player back to the placeholder and relayouts.
+1. **Support gate:** if `documentPictureInPicture` is absent (non-Chromium), the watcher stays
+   inert and native PiP is untouched — no errors.
+2. **Standalone watcher:** scans the page for `<video>` elements inside a `.playkit-player` and
+   overrides `requestPictureInPicture()` on each to open Document PiP instead. A bounded poll +
+   `MutationObserver` catch videos created or swapped later.
+3. **On PiP:** resolves the full `.playkit-player` wrapper (not the video-only
+   `.playkit-container`), copies the page's stylesheets into the new document, leaves a
+   placeholder, sizes the wrapper to fill the window, and `appendChild`s it into the PiP
+   window — so video, controls, and every overlay travel together.
+4. **On `pagehide`:** moves the player back to the placeholder and restores its inline styles.
 
 ---
-
-## Notes for your watermark scenario
-
-- **Nothing about the watermark plugin changes.** Because the same player DOM is reparented
-  (not re-instantiated), the watermark plugin keeps its state, session context, and refresh
-  timer. Confirm on your player that the watermark still shows the correct per-user value
-  after entering PiP — that's the acceptance test that matters.
-- **KS lifetime:** the session used to load media expires normally; the PiP move doesn't
-  extend or affect it. Long PiP sessions are bounded by your KS/DRM license as usual.
-- **Chromium only:** Document PiP is Chrome/Edge. You confirmed the customer only needs
-  Chrome. On other browsers users simply get native PiP (or no PiP) — no errors.
-- **One window, user gesture:** Document PiP allows a single window and requires a click,
-  both satisfied by the control-bar button.
 
 ## Browser support
 
 Chromium (Chrome/Edge) 116+. Not supported in Safari or Firefox as of this writing —
-verify current support before rollout if that ever changes.
+verify current support before rollout if that ever changes. On unsupported browsers users
+simply get native PiP (or no PiP) — no errors.
