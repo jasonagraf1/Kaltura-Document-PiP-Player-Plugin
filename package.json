@@ -1,6 +1,6 @@
 {
   "name": "playkit-js-document-pip",
-  "version": "1.0.0",
+  "version": "1.4.0",
   "description": "Kaltura Player V7 plugin that replaces native Picture-in-Picture with Document Picture-in-Picture, preserving overlay plugins (e.g. dynamic watermark) in the floating window.",
   "main": "dist/playkit-document-pip.js",
   "scripts": {
